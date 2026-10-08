@@ -1,4 +1,6 @@
 import { useState, useEffect } from 'react'
+import { apiFetch } from './api'
+import AuthForm from './AuthForm'
 import AsteroidList from './AsteroidList'
 import './App.css'
 
@@ -8,43 +10,82 @@ function App() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
 
-  // Grabs backend data (CORS) from the API and sets the state accordingly
+  const [token, setToken] = useState(localStorage.getItem('token'));
+  const [watchedIds, setWatchedIds] = useState(new Set());
+  const [showWatchedOnly, setShowWatchedOnly] = useState(false);
+
+  function handleLogout() {
+    localStorage.removeItem('token');
+    setToken(null);
+    setShowWatchedOnly(false);
+  }
+  
   useEffect(() => {
-    fetch("http://localhost:3000/api/asteroids")
-      // Check response status
-      .then((response) => {
-        if(!response.ok) {
-          throw new Error(`Server responded with ${response.status}`);
-        }
-        return response.json();
-      })
-      // Response is ok
-      .then((data) => {
-        setAsteroids(data);
-        setLoading(false);
-      })
-      // Response is not ok, handle error
-      .catch((err) => {
-        console.error("Failed to fetch asteroids", err);
-        setError(err.message);
-        setLoading(false);
-      });
+    apiFetch('/asteroids')
+      .then(setAsteroids)
+      .catch((err) => setError(err.message))
+      .finally(() => setLoading(false));
   }, []);
 
-  if (loading) {
-    return <p>Loading asteroids...</p>
+  useEffect(() => {
+    if(!token) {
+      setWatchedIds(new Set());
+      return;
+    }
+
+    apiFetch('/watchlist')
+      .then((data) => setWatchedIds(new Set(data.map((a) => a.neo_id))))
+      .catch((err) => {
+        if(err.status === 401) handleLogout();
+      });
+  }, [token]);
+
+  async function handleWatch(asteroidId) {
+    try{
+      await apiFetch('/watchlist', {
+        method: "POST",
+        body: JSON.stringify({asteroidId}),
+      });
+      setWatchedIds((prev) => new Set(prev).add(asteroidId));
+    } catch(err) {
+      if(err.status === 401) handleLogout();
+      else setError(err.message);
+    }
   }
 
-  if (error) {
-    return <p>Something went wrong: {error}</p>;
-  }
+  if(loading) return <p>Loading asteroids...</p>;
+  if(error) return <p>Something went wrong: {error}</p>
 
-  // Render main application UI
+  const visibleAsteroids = showWatchedOnly
+    ? asteroids.filter((a) => watchedIds.has(a.neo_id))
+    : asteroids;
+
   return (
     <div>
       <h1>NEA Watch</h1>
-      <p>{asteroids.length} asteroids tracked</p>
-      <AsteroidList asteroids={asteroids} />
+      {token ? (
+        <div>
+          <button onClick={handleLogout}>Logout</button>
+          <label>
+            <input
+              type="checkbox"
+              checked={showWatchedOnly}
+              onChange={(e) => setShowWatchedOnly(e.target.checked)}
+            />
+            Show my watchlist only
+          </label>
+        </div>
+      ) : (
+        <AuthForm onLoggedIn={setToken} />
+      )}
+
+      <p>{visibleAsteroids.length} asteroids shown</p>
+      <AsteroidList
+        asteroids={visibleAsteroids}
+        watchedIds={watchedIds}
+        canWatch={Boolean(token)}
+        onWatch={handleWatch}
+      />
     </div>
   );
 }
